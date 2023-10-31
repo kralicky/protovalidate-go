@@ -27,7 +27,11 @@ type ValidationError validate.Violations
 
 func (err *ValidationError) Error() string {
 	bldr := &strings.Builder{}
-	bldr.WriteString("validation error:")
+	bldr.WriteString("validation error")
+	if len(err.Violations) != 1 {
+		bldr.WriteString("s")
+	}
+	bldr.WriteString(":")
 	for _, violation := range err.Violations {
 		bldr.WriteString("\n - ")
 		if violation.FieldPath != "" {
