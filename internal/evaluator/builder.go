@@ -193,7 +193,25 @@ func (bldr *Builder) processFields(
 			msgEval.Err = err
 			return
 		}
-		msgEval.Append(fldEval)
+		if ii := fieldConstraints.GetIgnoreIf(); ii != nil {
+			compiledExpr, err := expression.Compile(
+				[]*validate.Constraint{ii},
+				bldr.env,
+				cel.Types(dynamicpb.NewMessage(desc)),
+				cel.Variable("this", cel.ObjectType(string(desc.FullName()))),
+			)
+
+			if err != nil {
+				msgEval.Err = err
+				return
+			}
+			msgEval.Append(ignoreIfEvaluator{
+				expr:         compiledExpr,
+				ifNotIgnored: fldEval,
+			})
+		} else {
+			msgEval.Append(fldEval)
+		}
 	}
 }
 
@@ -252,7 +270,14 @@ func (bldr *Builder) processZeroValue(
 	val *value,
 	_ MessageCache,
 ) error {
-	val.Zero = fdesc.Default()
+	switch fdesc.Kind() {
+	case protoreflect.MessageKind:
+		// For messages, the zero value needs to be a non-nil empty message.
+		// Default() will return a nil Value, which is never equal to anything.
+		val.Zero = protoreflect.ValueOfMessage(dynamicpb.NewMessage(fdesc.Message()).Type().New())
+	default:
+		val.Zero = fdesc.Default()
+	}
 	if forItems && fdesc.IsList() {
 		msg := dynamicpb.NewMessage(fdesc.ContainingMessage())
 		val.Zero = msg.Get(fdesc).List().NewElement()

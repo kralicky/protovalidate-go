@@ -243,8 +243,6 @@ func TestSet_BindThis(t *testing.T) {
 		},
 	}
 
-	set := ProgramSet{}
-
 	for _, tc := range tests {
 		test := tc
 		t.Run(test.name, func(t *testing.T) {
@@ -255,10 +253,15 @@ func TestSet_BindThis(t *testing.T) {
 			ast, issues := env.Compile(test.expr)
 			require.NoError(t, issues.Err())
 			prog, err := env.Program(ast)
+
 			require.NoError(t, err)
-			res, _, err := prog.Eval(set.bindThis(test.val))
+			err = BindThis(test.val, func(binding *Variable) error {
+				res, _, err := prog.Eval(binding)
+				require.NoError(t, err)
+				assert.Equal(t, test.exType.String(), res.Type().TypeName())
+				return nil
+			})
 			require.NoError(t, err)
-			assert.Equal(t, test.exType.String(), res.Type().TypeName())
 		})
 	}
 }

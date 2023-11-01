@@ -37,32 +37,32 @@ type ProgramSet []compiledProgram
 // if there is a type or range error. If failFast is true, execution stops at
 // the first failed expression.
 func (s ProgramSet) Eval(val any, failFast bool) error {
-	binding := s.bindThis(val)
-	defer varPool.Put(binding)
-
-	var violations []*validate.Violation
-	for _, expr := range s {
-		violation, err := expr.eval(binding)
-		if err != nil {
-			return err
-		}
-		if violation != nil {
-			violations = append(violations, violation)
-			if failFast {
-				break
+	return BindThis(val, func(binding *Variable) error {
+		var violations []*validate.Violation
+		for _, expr := range s {
+			violation, err := expr.eval(binding)
+			if err != nil {
+				return err
+			}
+			if violation != nil {
+				violations = append(violations, violation)
+				if failFast {
+					break
+				}
 			}
 		}
-	}
 
-	if len(violations) > 0 {
-		return &errors.ValidationError{Violations: violations}
-	}
+		if len(violations) > 0 {
+			return &errors.ValidationError{Violations: violations}
+		}
 
-	return nil
+		return nil
+	})
 }
 
-func (s ProgramSet) bindThis(val any) *Variable {
+func BindThis(val any, eval func(binding *Variable) error) error {
 	binding := varPool.Get()
+	defer varPool.Put(binding)
 	binding.Name = "this"
 
 	switch value := val.(type) {
@@ -81,7 +81,7 @@ func (s ProgramSet) bindThis(val any) *Variable {
 		binding.Val = value
 	}
 
-	return binding
+	return eval(binding)
 }
 
 // compiledProgram is a parsed and type-checked cel.Program along with the

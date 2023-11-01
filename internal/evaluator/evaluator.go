@@ -16,6 +16,7 @@ package evaluator
 
 import (
 	"github.com/bufbuild/protovalidate-go/internal/errors"
+	"github.com/bufbuild/protovalidate-go/internal/expression"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -100,6 +101,40 @@ func (m messageEvaluators) Tautology() bool {
 		}
 	}
 	return true
+}
+
+type ignoreIfEvaluator struct {
+	expr expression.ProgramSet
+
+	ifNotIgnored evaluator
+}
+
+func (i ignoreIfEvaluator) Tautology() bool {
+	return false
+}
+
+func (i ignoreIfEvaluator) EvaluateMessage(msg protoreflect.Message, failFast bool) error {
+	return i.Evaluate(protoreflect.ValueOfMessage(msg), failFast)
+}
+
+func (i ignoreIfEvaluator) Evaluate(val protoreflect.Value, failFast bool) error {
+	return expression.BindThis(val.Message(), func(binding *expression.Variable) error {
+		ignore, _, err := i.expr[0].Program.Eval(binding)
+		if err != nil {
+			return err
+		}
+		if b, ok := ignore.Value().(bool); ok {
+			if !b {
+				return i.ifNotIgnored.Evaluate(val, failFast)
+			}
+			return nil // ignore
+		} else {
+			return errors.NewRuntimeErrorf(
+				"ignore_if expression must evaluate to a boolean, got %T",
+				ignore.Value(),
+			)
+		}
+	})
 }
 
 var (
