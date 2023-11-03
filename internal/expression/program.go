@@ -15,8 +15,10 @@
 package expression
 
 import (
+	"errors"
+
 	"buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
-	"github.com/bufbuild/protovalidate-go/internal/errors"
+	ierrors "github.com/bufbuild/protovalidate-go/internal/errors"
 	"github.com/google/cel-go/cel"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -53,7 +55,7 @@ func (s ProgramSet) Eval(val any, failFast bool) error {
 		}
 
 		if len(violations) > 0 {
-			return &errors.ValidationError{Violations: violations}
+			return &ierrors.ValidationError{Violations: violations}
 		}
 
 		return nil
@@ -99,8 +101,19 @@ func (expr compiledProgram) eval(bindings *Variable) (*validate.Violation, error
 
 	value, _, err := expr.Program.Eval(bindings)
 	if err != nil {
-		return nil, errors.NewRuntimeErrorf(
-			"error evaluating %s: %w", expr.Source.GetId(), err)
+		if value == nil {
+			return nil, ierrors.NewRuntimeErrorf(
+				"error evaluating %s: %w", expr.Source.GetId(), err)
+		} else {
+			var rterr *ierrors.RuntimeError
+			if errors.As(err, &rterr) {
+				return nil, rterr
+			}
+			return &validate.Violation{
+				ConstraintId: expr.Source.GetId(),
+				Message:      err.Error(),
+			}, nil
+		}
 	}
 	switch val := value.Value().(type) {
 	case string:
@@ -120,7 +133,7 @@ func (expr compiledProgram) eval(bindings *Variable) (*validate.Violation, error
 			Message:      expr.Source.GetMessage(),
 		}, nil
 	default:
-		return nil, errors.NewRuntimeErrorf(
+		return nil, ierrors.NewRuntimeErrorf(
 			"resolved to an unexpected type %T", val)
 	}
 }

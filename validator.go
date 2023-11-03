@@ -49,6 +49,12 @@ type (
 	RuntimeError = errors.RuntimeError
 )
 
+var (
+	NewRuntimeError  = errors.NewRuntimeError
+	NewRuntimeErrorf = errors.NewRuntimeErrorf
+	IsRuntimeError   = errors.IsRuntimeError
+)
+
 // Validator performs validation on any proto.Message values. The Validator is
 // safe for concurrent use.
 type Validator struct {

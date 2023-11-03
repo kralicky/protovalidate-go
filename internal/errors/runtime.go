@@ -15,6 +15,7 @@
 package errors
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -42,3 +43,8 @@ func (err *RuntimeError) Error() string {
 }
 
 func (err *RuntimeError) Unwrap() error { return err.cause }
+
+func IsRuntimeError(err error) bool {
+	var runtimeErr *RuntimeError
+	return errors.As(err, &runtimeErr)
+}

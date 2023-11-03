@@ -17,6 +17,7 @@ package expression
 import (
 	"github.com/bufbuild/protovalidate-go/internal/errors"
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types"
 )
 
 // Expression is the read-only interface of either validate.Constraint or
@@ -106,7 +107,7 @@ func compileAST(env *cel.Env, expr Expression) (out compiledAST, err error) {
 	}
 
 	outType := ast.OutputType()
-	if !(outType.IsAssignableType(cel.BoolType) || outType.IsAssignableType(cel.StringType)) {
+	if !(outType.IsAssignableType(cel.BoolType) || outType.IsAssignableType(cel.StringType) || outType.IsExactType(types.ErrType)) {
 		return out, errors.NewCompilationErrorf(
 			"expression %s outputs %s, wanted either bool or string",
 			expr.GetId(), outType.String())
