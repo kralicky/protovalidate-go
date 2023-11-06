@@ -33,7 +33,7 @@ func TestBuildCache(t *testing.T) {
 	env, err := celext.DefaultEnv(true)
 	require.NoError(t, err, "failed to construct CEL environment")
 	bldr := NewBuilder(
-		env, false, resolver.DefaultResolver{},
+		env, resolver.DefaultResolver{},
 	)
 	wg := sync.WaitGroup{}
 	for i := 0; i < 100; i++ {

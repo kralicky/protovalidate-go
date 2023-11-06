@@ -15,15 +15,17 @@
 package evaluator
 
 import (
+	"sync/atomic"
+
 	"github.com/bufbuild/protovalidate-go/internal/errors"
 	"github.com/bufbuild/protovalidate-go/internal/expression"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-// evaluator defines a validation evaluator. evaluator implementations may elide
+// Evaluator defines a validation Evaluator. Evaluator implementations may elide
 // type checking of the passed in value, as the types have been guaranteed
 // during the build phase.
-type evaluator interface {
+type Evaluator interface {
 	// Tautology returns true if the evaluator always succeeds.
 	Tautology() bool
 
@@ -40,22 +42,12 @@ type evaluator interface {
 	Evaluate(val protoreflect.Value, failFast bool) error
 }
 
-// MessageEvaluator is essentially the same as evaluator, but specialized for
-// messages as an optimization. See evaluator for behavior.
-type MessageEvaluator interface {
-	evaluator
-
-	// EvaluateMessage checks that the provided msg is valid. See
-	// evaluator.Evaluate for behavior
-	EvaluateMessage(msg protoreflect.Message, failFast bool) error
-}
-
-// evaluators are a set of evaluator applied together to a value. Evaluation
+// Evaluators are a set of evaluator applied together to a value. Evaluation
 // merges all errors.ValidationError violations or short-circuits if failFast is
 // true or a different error is returned.
-type evaluators []evaluator
+type Evaluators []Evaluator
 
-func (e evaluators) Evaluate(val protoreflect.Value, failFast bool) (err error) {
+func (e Evaluators) Evaluate(val protoreflect.Value, failFast bool) (err error) {
 	var ok bool
 	for _, eval := range e {
 		evalErr := eval.Evaluate(val, failFast)
@@ -66,7 +58,7 @@ func (e evaluators) Evaluate(val protoreflect.Value, failFast bool) (err error) 
 	return err
 }
 
-func (e evaluators) Tautology() bool {
+func (e Evaluators) Tautology() bool {
 	for _, eval := range e {
 		if !eval.Tautology() {
 			return false
@@ -77,16 +69,13 @@ func (e evaluators) Tautology() bool {
 
 // messageEvaluators are a specialization of evaluators. See evaluators for
 // behavior details.
-type messageEvaluators []MessageEvaluator
+type messageEvaluators []Evaluator
 
 func (m messageEvaluators) Evaluate(val protoreflect.Value, failFast bool) error {
-	return m.EvaluateMessage(val.Message(), failFast)
-}
-
-func (m messageEvaluators) EvaluateMessage(msg protoreflect.Message, failFast bool) (err error) {
 	var ok bool
+	var err error
 	for _, eval := range m {
-		evalErr := eval.EvaluateMessage(msg, failFast)
+		evalErr := eval.Evaluate(val, failFast)
 		if ok, err = errors.Merge(err, evalErr, failFast); !ok {
 			return err
 		}
@@ -106,15 +95,11 @@ func (m messageEvaluators) Tautology() bool {
 type ignoreIfEvaluator struct {
 	expr expression.ProgramSet
 
-	ifNotIgnored evaluator
+	ifNotIgnored Evaluator
 }
 
 func (i ignoreIfEvaluator) Tautology() bool {
 	return false
-}
-
-func (i ignoreIfEvaluator) EvaluateMessage(msg protoreflect.Message, failFast bool) error {
-	return i.Evaluate(protoreflect.ValueOfMessage(msg), failFast)
 }
 
 func (i ignoreIfEvaluator) Evaluate(val protoreflect.Value, failFast bool) error {
@@ -137,7 +122,26 @@ func (i ignoreIfEvaluator) Evaluate(val protoreflect.Value, failFast bool) error
 	})
 }
 
+type coverageEvaluator struct {
+	base           Evaluator
+	containingDesc protoreflect.Descriptor
+	constraint     protoreflect.Message
+	hitCount       atomic.Int32
+}
+
+func (c *coverageEvaluator) Tautology() bool {
+	return c.base.Tautology()
+}
+
+func (c *coverageEvaluator) Evaluate(val protoreflect.Value, failFast bool) error {
+	c.hitCount.Add(1)
+	return c.base.Evaluate(val, failFast)
+}
+
+func (c *coverageEvaluator) HitCount() int {
+	return int(c.hitCount.Load())
+}
+
 var (
-	_ evaluator        = evaluators(nil)
-	_ MessageEvaluator = messageEvaluators(nil)
+	_ Evaluator = Evaluators(nil)
 )

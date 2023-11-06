@@ -26,15 +26,10 @@ func (c celPrograms) Evaluate(val protoreflect.Value, failFast bool) error {
 	return expression.ProgramSet(c).Eval(val.Interface(), failFast)
 }
 
-func (c celPrograms) EvaluateMessage(msg protoreflect.Message, failFast bool) error {
-	return expression.ProgramSet(c).Eval(msg.Interface(), failFast)
-}
-
 func (c celPrograms) Tautology() bool {
 	return len(c) == 0
 }
 
 var (
-	_ evaluator        = (celPrograms)(nil)
-	_ MessageEvaluator = (celPrograms)(nil)
+	_ Evaluator = (celPrograms)(nil)
 )

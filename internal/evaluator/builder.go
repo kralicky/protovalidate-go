@@ -35,7 +35,95 @@ type Builder struct {
 	env         *cel.Env
 	constraints constraints.Cache
 	resolver    StandardConstraintResolver
-	Load        func(desc protoreflect.MessageDescriptor) MessageEvaluator
+	Load        func(desc protoreflect.MessageDescriptor) Evaluator
+
+	coverageEnabled bool
+	coverageTracker *CoverageTracker
+}
+
+type appender interface {
+	Append(eval Evaluator)
+}
+
+func (b *Builder) trackAppend(
+	to appender,
+	eval Evaluator,
+	containingDesc protoreflect.Descriptor,
+	constraint protoreflect.ProtoMessage,
+) {
+	if !b.coverageEnabled {
+		to.Append(eval)
+	}
+	to.Append(b.coverageTracker.addTracking(eval, containingDesc, constraint.ProtoReflect()))
+}
+
+type CoverageTracker struct {
+	mu         sync.Mutex
+	evaluators []*coverageEvaluator
+}
+
+func (ct *CoverageTracker) addTracking(
+	eval Evaluator,
+	containingDesc protoreflect.Descriptor,
+	constraint protoreflect.Message,
+) Evaluator {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	ce := &coverageEvaluator{
+		base:           eval,
+		containingDesc: containingDesc,
+		constraint:     constraint,
+	}
+	ct.evaluators = append(ct.evaluators, ce)
+	return ce
+}
+
+func (ct *CoverageTracker) GenerateCoverageReport() *CoverageReport {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	report := &CoverageReport{
+		AllEvaluators:      make([]EvaluatorCoverage, 0, len(ct.evaluators)),
+		ByMessageName:      make(map[protoreflect.FullName][]*EvaluatorCoverage),
+		ByUniqueConstraint: make(map[protoreflect.Message][]*EvaluatorCoverage),
+	}
+	for _, ce := range ct.evaluators {
+		if ce.Tautology() {
+			continue
+		}
+		report.AllEvaluators = append(report.AllEvaluators, EvaluatorCoverage{
+			Evaluator:      ce.base,
+			ContainingDesc: ce.containingDesc,
+			Constraint:     ce.constraint,
+			HitCount:       int(ce.hitCount.Load()),
+		})
+		report.ByMessageName[ce.containingDesc.FullName()] = append(
+			report.ByMessageName[ce.containingDesc.FullName()],
+			&report.AllEvaluators[len(report.AllEvaluators)-1],
+		)
+		report.ByUniqueConstraint[ce.constraint] = append(
+			report.ByUniqueConstraint[ce.constraint],
+			&report.AllEvaluators[len(report.AllEvaluators)-1],
+		)
+	}
+	return report
+}
+
+type CoverageReport struct {
+	AllEvaluators []EvaluatorCoverage
+	// Coverage reports that would be evaluated for each top-level message.
+	// Nested messages containing evaluators will be duplicated in each
+	// top-level message that contains them, whether directly or indirectly.
+	ByMessageName map[protoreflect.FullName][]*EvaluatorCoverage
+	// Coverage reports by constraint message instance (where the constraint was
+	// used in an option).
+	ByUniqueConstraint map[protoreflect.Message][]*EvaluatorCoverage
+}
+
+type EvaluatorCoverage struct {
+	Evaluator      Evaluator
+	ContainingDesc protoreflect.Descriptor
+	Constraint     protoreflect.Message
+	HitCount       int
 }
 
 type StandardConstraintResolver interface {
@@ -44,27 +132,59 @@ type StandardConstraintResolver interface {
 	ResolveFieldConstraints(desc protoreflect.FieldDescriptor) *validate.FieldConstraints
 }
 
+type builderOptions struct {
+	enableCoverageTracking bool
+	disableLazy            bool
+	seedDescs              []protoreflect.MessageDescriptor
+}
+
+type BuilderOption func(*builderOptions)
+
+func WithCoverageTracking(enable bool) BuilderOption {
+	return func(o *builderOptions) {
+		o.enableCoverageTracking = enable
+	}
+}
+
+func WithDisableLazy(disable bool) BuilderOption {
+	return func(o *builderOptions) {
+		o.disableLazy = disable
+	}
+}
+
+func WithSeedDescriptors(descs ...protoreflect.MessageDescriptor) BuilderOption {
+	return func(o *builderOptions) {
+		o.seedDescs = append(o.seedDescs, descs...)
+	}
+}
+
 // NewBuilder initializes a new Builder.
 func NewBuilder(
 	env *cel.Env,
-	disableLazy bool,
 	res StandardConstraintResolver,
-	seedDesc ...protoreflect.MessageDescriptor,
+	opts ...BuilderOption,
 ) *Builder {
-	bldr := &Builder{
-		env:         env,
-		constraints: constraints.NewCache(),
-		resolver:    res,
+	var options builderOptions
+	for _, opt := range opts {
+		opt(&options)
 	}
 
-	if disableLazy {
+	bldr := &Builder{
+		env:             env,
+		constraints:     constraints.NewCache(),
+		resolver:        res,
+		coverageTracker: &CoverageTracker{},
+		coverageEnabled: options.enableCoverageTracking,
+	}
+
+	if options.disableLazy {
 		bldr.Load = bldr.load
 	} else {
 		bldr.Load = bldr.loadOrBuild
 	}
 
-	cache := make(MessageCache, len(seedDesc))
-	for _, desc := range seedDesc {
+	cache := make(MessageCache, len(options.seedDescs))
+	for _, desc := range options.seedDescs {
 		bldr.build(desc, cache)
 	}
 	bldr.cache.Store(&cache)
@@ -74,7 +194,7 @@ func NewBuilder(
 // load returns a pre-cached MessageEvaluator for the given descriptor or, if
 // the descriptor is unknown, returns an evaluator that always resolves to a
 // errors.CompilationError.
-func (bldr *Builder) load(desc protoreflect.MessageDescriptor) MessageEvaluator {
+func (bldr *Builder) load(desc protoreflect.MessageDescriptor) Evaluator {
 	if eval, ok := (*bldr.cache.Load())[desc]; ok {
 		return eval
 	}
@@ -84,7 +204,7 @@ func (bldr *Builder) load(desc protoreflect.MessageDescriptor) MessageEvaluator 
 // loadOrBuild either returns a memoized MessageEvaluator for the given
 // descriptor, or lazily constructs a new one. This method is thread-safe via
 // locking.
-func (bldr *Builder) loadOrBuild(desc protoreflect.MessageDescriptor) MessageEvaluator {
+func (bldr *Builder) loadOrBuild(desc protoreflect.MessageDescriptor) Evaluator {
 	if eval, ok := (*bldr.cache.Load())[desc]; ok {
 		return eval
 	}
@@ -157,7 +277,7 @@ func (bldr *Builder) processMessageExpressions(
 		return
 	}
 
-	msgEval.Append(celPrograms(compiledExprs))
+	bldr.trackAppend(msgEval, celPrograms(compiledExprs), desc, msgConstraints)
 }
 
 func (bldr *Builder) processOneofConstraints(
@@ -175,12 +295,13 @@ func (bldr *Builder) processOneofConstraints(
 			Required:   oneofConstraints.GetRequired(),
 		}
 		msgEval.Append(oneofEval)
+		// 		bldr.trackAppend(msgEval, oneofEval, desc, oneofConstraints)
 	}
 }
 
 func (bldr *Builder) processFields(
 	desc protoreflect.MessageDescriptor,
-	_ *validate.MessageConstraints,
+	msgConstraints *validate.MessageConstraints,
 	msgEval *message,
 	cache MessageCache,
 ) {
@@ -209,8 +330,13 @@ func (bldr *Builder) processFields(
 				expr:         compiledExpr,
 				ifNotIgnored: fldEval,
 			})
+			// bldr.trackAppend(msgEval, ignoreIfEvaluator{
+			// 	expr:         compiledExpr,
+			// 	ifNotIgnored: fldEval,
+			// }, desc, ii)
 		} else {
 			msgEval.Append(fldEval)
+			// bldr.trackAppend(msgEval, fldEval, fdesc, fieldConstraints)
 		}
 	}
 }
@@ -313,7 +439,7 @@ func (bldr *Builder) processFieldExpressions(
 		return err
 	}
 	if len(compiledExpressions) > 0 {
-		eval.Constraints = append(eval.Constraints, celPrograms(compiledExpressions))
+		bldr.trackAppend(eval, celPrograms(compiledExpressions), fieldDesc, fieldConstraints)
 	}
 	return nil
 }
@@ -337,7 +463,7 @@ func (bldr *Builder) processEmbeddedMessage(
 			"failed to compile embedded type %s for %s: %w",
 			fdesc.Message().FullName(), fdesc.FullName(), err)
 	}
-	valEval.Append(embedEval)
+	bldr.trackAppend(valEval, embedEval, fdesc.ContainingMessage(), rules)
 
 	return nil
 }
@@ -364,7 +490,7 @@ func (bldr *Builder) processWrapperConstraints(
 	if err != nil {
 		return err
 	}
-	valEval.Append(unwrapped.Constraints)
+	bldr.trackAppend(valEval, unwrapped.Constraints, fdesc, rules)
 	return nil
 }
 
@@ -384,7 +510,7 @@ func (bldr *Builder) processStandardConstraints(
 	if err != nil {
 		return err
 	}
-	valEval.Append(celPrograms(stdConstraints))
+	bldr.trackAppend(valEval, celPrograms(stdConstraints), fdesc, constraints)
 	return nil
 }
 
@@ -407,7 +533,7 @@ func (bldr *Builder) processAnyConstraints(
 		In:                stringsToSet(fieldConstraints.GetAny().GetIn()),
 		NotIn:             stringsToSet(fieldConstraints.GetAny().GetNotIn()),
 	}
-	valEval.Append(anyEval)
+	bldr.trackAppend(valEval, anyEval, fdesc, fieldConstraints)
 	return nil
 }
 
@@ -422,7 +548,9 @@ func (bldr *Builder) processEnumConstraints(
 		return nil
 	}
 	if fieldConstraints.GetEnum().GetDefinedOnly() {
-		valEval.Append(definedEnum{ValueDescriptors: fdesc.Enum().Values()})
+		bldr.trackAppend(valEval, definedEnum{
+			ValueDescriptors: fdesc.Enum().Values(),
+		}, fdesc.Enum(), fieldConstraints)
 	}
 	return nil
 }
@@ -464,7 +592,7 @@ func (bldr *Builder) processMapConstraints(
 			fieldDesc.FullName(), err)
 	}
 
-	valEval.Append(mapEval)
+	bldr.trackAppend(valEval, mapEval, fieldDesc, constraints)
 	return nil
 }
 
@@ -486,8 +614,15 @@ func (bldr *Builder) processRepeatedConstraints(
 			"failed to compile items constraints for repeated %v: %w", fdesc.FullName(), err)
 	}
 
-	valEval.Append(listEval)
+	bldr.trackAppend(valEval, listEval, fdesc, fieldConstraints)
 	return nil
+}
+
+func (bldr *Builder) GenerateCoverageReport() (*CoverageReport, error) {
+	if !bldr.coverageEnabled {
+		return nil, errors.NewRuntimeErrorf("coverage tracking not enabled")
+	}
+	return bldr.coverageTracker.GenerateCoverageReport(), nil
 }
 
 type MessageCache map[protoreflect.MessageDescriptor]*message

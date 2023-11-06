@@ -29,10 +29,7 @@ type oneof struct {
 }
 
 func (o oneof) Evaluate(val protoreflect.Value, failFast bool) error {
-	return o.EvaluateMessage(val.Message(), failFast)
-}
-
-func (o oneof) EvaluateMessage(msg protoreflect.Message, _ bool) error {
+	msg := val.Message()
 	if o.Required && msg.WhichOneof(o.Descriptor) == nil {
 		return &errors.ValidationError{Violations: []*validate.Violation{{
 			FieldPath:    string(o.Descriptor.Name()),
@@ -47,4 +44,4 @@ func (o oneof) Tautology() bool {
 	return !o.Required
 }
 
-var _ MessageEvaluator = oneof{}
+var _ Evaluator = oneof{}

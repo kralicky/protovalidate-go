@@ -24,7 +24,7 @@ type value struct {
 	// Zero is the default or zero-value for this value's type
 	Zero protoreflect.Value
 	// Constraints are the individual evaluators applied to a value
-	Constraints evaluators
+	Constraints Evaluators
 	// IgnoreEmpty indicates that the Constraints should not be applied if the
 	// field is unset or the default (typically zero) value.
 	IgnoreEmpty bool
@@ -41,10 +41,10 @@ func (v *value) Tautology() bool {
 	return v.Constraints.Tautology()
 }
 
-func (v *value) Append(eval evaluator) {
+func (v *value) Append(eval Evaluator) {
 	if !eval.Tautology() {
 		v.Constraints = append(v.Constraints, eval)
 	}
 }
 
-var _ evaluator = (*value)(nil)
+var _ Evaluator = (*value)(nil)

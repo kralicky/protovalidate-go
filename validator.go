@@ -87,9 +87,10 @@ func New(options ...ValidatorOption) (*Validator, error) {
 
 	bldr := evaluator.NewBuilder(
 		env,
-		cfg.disableLazy,
 		cfg.resolver,
-		cfg.desc...,
+		evaluator.WithSeedDescriptors(cfg.desc...),
+		evaluator.WithCoverageTracking(cfg.coverage),
+		evaluator.WithDisableLazy(cfg.disableLazy),
 	)
 
 	return &Validator{
@@ -110,7 +111,14 @@ func (v *Validator) Validate(msg proto.Message) error {
 	}
 	refl := msg.ProtoReflect()
 	eval := v.builder.Load(refl.Descriptor())
-	return eval.EvaluateMessage(refl, v.failFast)
+	return eval.Evaluate(protoreflect.ValueOfMessage(refl), v.failFast)
+}
+
+type CoverageReport = evaluator.CoverageReport
+type EvaluatorCoverage = evaluator.EvaluatorCoverage
+
+func (v *Validator) GenerateCoverageReport() (*CoverageReport, error) {
+	return v.builder.GenerateCoverageReport()
 }
 
 type config struct {
@@ -120,6 +128,7 @@ type config struct {
 	desc        []protoreflect.MessageDescriptor
 	resolver    StandardConstraintResolver
 	extendFunc  func(e *cel.Env) []cel.EnvOption
+	coverage    bool
 }
 
 // A ValidatorOption modifies the default configuration of a Validator. See the
@@ -181,6 +190,16 @@ func WithExtendFunc(fn func(e *cel.Env) []cel.EnvOption) ValidatorOption {
 func WithDisableLazy(disable bool) ValidatorOption {
 	return func(cfg *config) {
 		cfg.disableLazy = disable
+	}
+}
+
+// Enables basic coverage tracking for validations. With this option enabled,
+// calling GenerateCoverageReport() at any time will return information
+// about all known constraints and how many times each was evaluated, at the
+// time the report was generated.
+func WithCoverage(coverage bool) ValidatorOption {
+	return func(cfg *config) {
+		cfg.coverage = coverage
 	}
 }
 

@@ -79,4 +79,4 @@ func stringsToSet(ss []string) map[string]struct{} {
 	return set
 }
 
-var _ evaluator = anyPB{}
+var _ Evaluator = anyPB{}

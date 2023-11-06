@@ -30,21 +30,17 @@ type message struct {
 }
 
 func (m *message) Evaluate(val protoreflect.Value, failFast bool) error {
-	return m.EvaluateMessage(val.Message(), failFast)
-}
-
-func (m *message) EvaluateMessage(msg protoreflect.Message, failFast bool) error {
 	if m.Err != nil {
 		return m.Err
 	}
-	return m.evaluators.EvaluateMessage(msg, failFast)
+	return m.evaluators.Evaluate(val, failFast)
 }
 
 func (m *message) Tautology() bool {
 	return m.Err == nil && m.evaluators.Tautology()
 }
 
-func (m *message) Append(eval MessageEvaluator) {
+func (m *message) Append(eval Evaluator) {
 	if eval != nil && !eval.Tautology() {
 		m.evaluators = append(m.evaluators, eval)
 	}
@@ -69,8 +65,4 @@ func (u unknownMessage) Evaluate(_ protoreflect.Value, _ bool) error {
 	return u.Err()
 }
 
-func (u unknownMessage) EvaluateMessage(_ protoreflect.Message, _ bool) error {
-	return u.Err()
-}
-
-var _ MessageEvaluator = (*message)(nil)
+var _ Evaluator = (*message)(nil)

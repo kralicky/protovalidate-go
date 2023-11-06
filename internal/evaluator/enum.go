@@ -42,4 +42,4 @@ func (d definedEnum) Tautology() bool {
 	return false
 }
 
-var _ evaluator = definedEnum{}
+var _ Evaluator = definedEnum{}

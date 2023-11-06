@@ -1,6 +1,6 @@
 module github.com/bufbuild/protovalidate-go
 
-go 1.19
+go 1.21
 
 require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.31.0-20231030212536-12f9cba37c9d.2

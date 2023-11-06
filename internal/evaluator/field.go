@@ -36,11 +36,8 @@ type field struct {
 	Optional bool
 }
 
-func (f field) Evaluate(val protoreflect.Value, failFast bool) error {
-	return f.EvaluateMessage(val.Message(), failFast)
-}
-
-func (f field) EvaluateMessage(msg protoreflect.Message, failFast bool) (err error) {
+func (f field) Evaluate(msgVal protoreflect.Value, failFast bool) error {
+	msg := msgVal.Message()
 	if f.Required && !msg.Has(f.Descriptor) {
 		return &errors.ValidationError{Violations: []*validate.Violation{{
 			FieldPath:    string(f.Descriptor.Name()),
@@ -54,6 +51,7 @@ func (f field) EvaluateMessage(msg protoreflect.Message, failFast bool) (err err
 	}
 
 	val := msg.Get(f.Descriptor)
+	var err error
 	if err = f.Value.Evaluate(val, failFast); err != nil {
 		errors.PrefixErrorPaths(err, "%s", f.Descriptor.Name())
 	}
@@ -64,4 +62,4 @@ func (f field) Tautology() bool {
 	return !f.Required && f.Value.Tautology()
 }
 
-var _ MessageEvaluator = field{}
+var _ Evaluator = field{}
